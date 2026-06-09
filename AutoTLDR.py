@@ -518,7 +518,7 @@ class AutoTLDRMod(loader.Module):
             line = line.replace("&lt;/a&gt;", "</a>")
             line = re.sub(r"&lt;a\s+([^&]+)&gt;", r"<a \1>", line)
             lines.append(line)
-        return "<blockquote>" + "\n".join(lines) + "</blockquote>"
+        return "\n".join(f"> {l}" for l in lines)
 
     @staticmethod
     def _linkify_names(text: str, senders: dict) -> str:
