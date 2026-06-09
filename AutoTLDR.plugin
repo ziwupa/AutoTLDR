@@ -29,7 +29,7 @@ OR_MODELS = [
     "openai/gpt-4o-mini", "openai/gpt-4o", "google/gemini-2.5-flash", "anthropic/claude-3-haiku"
 ]
 DS_MODELS = [
-    "deepseek-chat", "deepseek-reasoner"
+    "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"
 ]
 
 
