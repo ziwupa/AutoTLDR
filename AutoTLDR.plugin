@@ -19,9 +19,10 @@ from ui.settings import Header, Input, Divider, Switch, Selector, Text
 from client_utils import (
     RequestCallback,
     get_messages_controller,
-    send_request,
+    get_user_config,
     run_on_queue,
 )
+from org.telegram.messenger import AccountInstance
 from org.telegram.tgnet import TLRPC
 from java.util import ArrayList
 
@@ -278,8 +279,11 @@ class Plugin(BasePlugin):
                     raise
             raise RuntimeError(last_err or "DS: лимит")
 
-    def _send_msg(self, peer, text):
-        """Отправляет сообщение (на главном треде)."""
+    def _conn(self, account):
+        uc = get_user_config()
+        return AccountInstance.getInstance(uc.getCurrentAccount()).getConnectionsManager()
+
+    def _send_msg(self, account, peer, text):
         def do_send():
             req = TLRPC.TL_messages_sendMessage()
             req.peer = peer
@@ -288,7 +292,7 @@ class Plugin(BasePlugin):
             req.no_webpage = True
             cb = RequestCallback(lambda r, e: None)
             self._keep(cb)
-            send_request(req, cb)
+            self._conn(account).sendRequest(req, cb)
         run_on_queue(do_send)
 
     # ---------- hooks ----------
@@ -312,16 +316,10 @@ class Plugin(BasePlugin):
                         count = max(1, int(p))
                         break
 
-                _peer = peer
-                _cmd = cmd
-                _args = args
-                _count = count
-                _reply_id = reply_id
                 _self = self
-
-                # Анализ в фоновом потоке (urllib работает из любого треда)
-                # send_request — через run_on_queue на главный тред
-                threading.Thread(target=lambda: _self._fetch_and_analyze(_cmd, _peer, _reply_id, _args, _count), daemon=True).start()
+                _account = account
+                # Анализ в фоновом потоке
+                threading.Thread(target=lambda: _self._fetch_and_analyze(_account, cmd, peer, reply_id, args, count), daemon=True).start()
 
             elif cmd == ".kl":
                 threading.Thread(target=self._handle_kl, args=(account, params, args), daemon=True).start()
@@ -397,7 +395,7 @@ class Plugin(BasePlugin):
                     msgs.sort(key=lambda m: getattr(m, "id", 0))
 
                     if _cmd == ".tldrchat" or (_cmd == ".tldr" and not _reply_id):
-                        plugin_self._do_chat_analysis(_peer, msgs, names, _count)
+                        plugin_self._do_chat_analysis(_acc, _peer, msgs, names, _count)
                     elif _cmd == ".tldrcmp":
                         # ищем двух юзеров
                         targets = []
@@ -418,7 +416,7 @@ class Plugin(BasePlugin):
                         if not u1 or not u2:
                             run_on_queue(lambda: BulletinHelper.show_error("AutoTLDR: юзеры не найдены в истории"))
                             return
-                        plugin_self._do_cmp_analysis(_peer, msgs, names, u1, u2, _count)
+                        plugin_self._do_cmp_analysis(_acc, _peer, msgs, names, u1, u2, _count)
                     else:
                         # .tldr — юзер из реплая
                         target_uid = None
@@ -441,14 +439,14 @@ class Plugin(BasePlugin):
                         if not target_uid:
                             run_on_queue(lambda: BulletinHelper.show_error("AutoTLDR: юзер не найден"))
                             return
-                        plugin_self._do_user_analysis(_peer, msgs, names, target_uid, _count)
+                        plugin_self._do_user_analysis(_acc, _peer, msgs, names, target_uid, _count)
 
                 except Exception as e:
                     run_on_queue(lambda: BulletinHelper.show_error(f"AutoTLDR analysis: {e}"))
 
             cb = RequestCallback(on_history)
             self._keep(cb)
-            run_on_queue(lambda: send_request(req, cb))
+            run_on_queue(lambda: self._conn(0).sendRequest(req, cb))
 
         except Exception as e:
             run_on_queue(lambda: BulletinHelper.show_error(f"AutoTLDR fetch: {e}"))
@@ -491,11 +489,11 @@ class Plugin(BasePlugin):
             "Имена выделяй жирным. Последняя строка: <b>Итог:</b> резюме. 4-7 строк.\n"
         )
 
-    def _do_user_analysis(self, peer, msgs, names, uid, count):
+    def _do_user_analysis(self, account, peer, msgs, names, uid, count):
         name = names.get(uid, str(uid))
         collected = self._collect_msgs(msgs, names, uid, count)
         if not collected:
-            self._send_msg(peer, f"🚫 У {name} нет сообщений в истории.")
+            self._send_msg(account, peer, f"🚫 У {name} нет сообщений в истории.")
             return
 
         prompt = (
@@ -506,12 +504,12 @@ class Plugin(BasePlugin):
         )
         result = self._ai_call(prompt)
         body = sanitize(result)
-        self._send_msg(peer, f"🧠 <b>Разбор {name}</b> <i>(по {len(collected)} сообщ.)</i>\n\n{body}")
+        self._send_msg(account, peer, f"🧠 <b>Разбор {name}</b> <i>(по {len(collected)} сообщ.)</i>\n\n{body}")
 
-    def _do_chat_analysis(self, peer, msgs, names, count):
+    def _do_chat_analysis(self, account, peer, msgs, names, count):
         collected = self._collect_chat_msgs(msgs, names, count)
         if not collected:
-            self._send_msg(peer, "🚫 В чате нет сообщений.")
+            self._send_msg(account, peer, "🚫 В чате нет сообщений.")
             return
 
         prompt = (
@@ -522,9 +520,9 @@ class Plugin(BasePlugin):
         )
         result = self._ai_call(prompt)
         body = sanitize(result)
-        self._send_msg(peer, f"🧠 <b>О чём щас чат</b> <i>(по {len(collected)} сообщ.)</i>\n\n{body}")
+        self._send_msg(account, peer, f"🧠 <b>О чём щас чат</b> <i>(по {len(collected)} сообщ.)</i>\n\n{body}")
 
-    def _do_cmp_analysis(self, peer, msgs, names, u1, u2, count):
+    def _do_cmp_analysis(self, account, peer, msgs, names, u1, u2, count):
         uid1 = getattr(u1, "id", 0)
         uid2 = getattr(u2, "id", 0)
         name1 = names.get(uid1, str(uid1))
@@ -542,7 +540,7 @@ class Plugin(BasePlugin):
         )
         result = self._ai_call(prompt)
         body = sanitize(result)
-        self._send_msg(peer, f"🧠 <b>{name1} vs {name2}</b> <i>(по {len(c1)} и {len(c2)} сообщ.)</i>\n\n{body}")
+        self._send_msg(account, peer, f"🧠 <b>{name1} vs {name2}</b> <i>(по {len(c1)} и {len(c2)} сообщ.)</i>\n\n{body}")
 
     # ---------- .kl ----------
 
@@ -584,7 +582,7 @@ class Plugin(BasePlugin):
 
                     cb = RequestCallback(on_kl_msg)
                     plugin_self._keep(cb)
-                    run_on_queue(lambda: send_request(req, cb))
+                    run_on_queue(lambda: plugin_self._conn(account).sendRequest(req, cb))
                     return
 
             elif args.strip():
