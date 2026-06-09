@@ -436,73 +436,53 @@ class Plugin(BasePlugin):
 
     def _handle_kl(self, account, params, args):
         try:
-            client = self.client
-            peer = params.peer
-            reply = getattr(params, "reply_to_msg_id", None)
+            reply_id = getattr(params, "reply_to_msg_id", None)
 
-            if not reply:
-                # без реплая — сброс
+            if reply_id:
+                self.set_setting("_kl_reply_id", str(reply_id))
+                self.set_setting("_kl_peer", str(getattr(params, "peer", "")))
+                BulletinHelper.show_info("⏳ AutoTLDR: обрабатываю реплай... переотправь .kl без реплая или просто вставь ключи в сообщение")
+                return
+            elif args.strip():
+                raw = args
+            else:
                 self.set_setting("g_keys_pool", "")
                 self.set_setting("or_keys_pool", "")
                 self.set_setting("ds_keys_pool", "")
                 BulletinHelper.show_info("✅ AutoTLDR: пул ключей очищен")
                 return
 
-            msgs = client.get_messages(peer, ids=[reply])
-            if not msgs or not msgs[0]:
-                BulletinHelper.show_error("AutoTLDR .kl: не удалось получить сообщение")
-                return
-
-            msg = msgs[0]
-            raw = (getattr(msg, "message", "") or "").strip()
-
-            # если документ — скачать
-            media = getattr(msg, "media", None)
-            if media and not raw:
-                try:
-                    path = client.download_media(msg, file="/tmp/autotldr_keys.txt")
-                    if path:
-                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                            raw = f.read()
-                except Exception:
-                    pass
-
-            if not raw:
-                # пустой реплай = сброс
-                self.set_setting("g_keys_pool", "")
-                self.set_setting("or_keys_pool", "")
-                self.set_setting("ds_keys_pool", "")
-                BulletinHelper.show_info("✅ AutoTLDR: пул ключей очищен")
-                return
-
-            g_keys = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
-            or_keys = re.findall(r"sk-or-v1-[0-9a-fA-F]{30,}", raw)
-            ds_keys = [k for k in re.findall(r"sk-[0-9a-zA-Z]{20,}", raw) if not k.startswith("sk-or-v1-")]
-
-            if not g_keys and not or_keys and not ds_keys:
-                BulletinHelper.show_error("AutoTLDR .kl: ключи не найдены")
-                return
-
-            def merge_pool(setting_key, new):
-                old = self.get_setting(setting_key, "")
-                existing = set(old.split("\n")) if old else set()
-                added = 0
-                for k in new:
-                    if k not in existing:
-                        existing.add(k)
-                        added += 1
-                self.set_setting(setting_key, "\n".join(existing))
-                return added, len(existing)
-
-            g_added, g_total = merge_pool("g_keys_pool", g_keys)
-            or_added, or_total = merge_pool("or_keys_pool", or_keys)
-            ds_added, ds_total = merge_pool("ds_keys_pool", ds_keys)
-            BulletinHelper.show_info(
-                f"✅ Gemini: +{g_added} (всего {g_total}) | OR: +{or_added} (всего {or_total}) | DS: +{ds_added} (всего {ds_total})"
-            )
+            self._process_keys(raw)
 
         except Exception as e:
             BulletinHelper.show_error(f"AutoTLDR .kl: {e}")
+
+    def _process_keys(self, raw):
+        g_keys = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
+        or_keys = re.findall(r"sk-or-v1-[0-9a-fA-F]{30,}", raw)
+        ds_keys = [k for k in re.findall(r"sk-[0-9a-zA-Z]{20,}", raw) if not k.startswith("sk-or-v1-")]
+
+        if not g_keys and not or_keys and not ds_keys:
+            BulletinHelper.show_error("AutoTLDR .kl: ключи не найдены")
+            return
+
+        def merge_pool(setting_key, new):
+            old = self.get_setting(setting_key, "")
+            existing = set(old.split("\n")) if old else set()
+            added = 0
+            for k in new:
+                if k not in existing:
+                    existing.add(k)
+                    added += 1
+            self.set_setting(setting_key, "\n".join(existing))
+            return added, len(existing)
+
+        g_added, g_total = merge_pool("g_keys_pool", g_keys)
+        or_added, or_total = merge_pool("or_keys_pool", or_keys)
+        ds_added, ds_total = merge_pool("ds_keys_pool", ds_keys)
+        BulletinHelper.show_info(
+            f"✅ Gemini: +{g_added} (всего {g_total}) | OR: +{or_added} (всего {or_total}) | DS: +{ds_added} (всего {ds_total})"
+        )
 
     def _do_user(self, account, params, peer, client, target_id, target_name, count):
         msgs = self._collect(client, peer, target_id, count)
