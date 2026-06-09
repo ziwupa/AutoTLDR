@@ -183,6 +183,11 @@ class Plugin(BasePlugin):
 
     def on_plugin_load(self):
         self.add_on_send_message_hook()
+        self._callbacks = []  # храним чтобы GC не убирал
+
+    def _keep(self, cb):
+        self._callbacks.append(cb)
+        return cb
 
     def create_settings(self):
         return [
@@ -274,37 +279,17 @@ class Plugin(BasePlugin):
             raise RuntimeError(last_err or "DS: лимит")
 
     def _send_msg(self, peer, text):
-        """Отправляет сообщение через TL API."""
-        req = TLRPC.TL_messages_sendMessage()
-        req.peer = peer
-        req.message = text
-        req.random_id = random.randint(0, 2**63 - 1)
-        req.no_webpage = True
-        try:
-            req.entities = self._html_to_entities(text)
-        except:
-            pass
-
-        def on_sent(resp, err):
-            pass
-
-        try:
-            send_request(req, RequestCallback(on_sent))
-        except:
-            pass
-
-    @staticmethod
-    def _html_to_entities(text):
-        """Конвертирует HTML в TLRPC entities. Упрощённо: только <b>, <i>, <a>."""
-        entities = ArrayList()
-        for tag, cls in [("<b>", TLRPC.TL_messageEntityBold),
-                         ("</b>", None),
-                         ("<i>", TLRPC.TL_messageEntityItalic),
-                         ("</i>", None),
-                         ("<a href=\"", None),
-                         ("</a>", None)]:
-            pass  # слишком сложно для сейчас — просто шлём HTML как plain text
-        return entities
+        """Отправляет сообщение (на главном треде)."""
+        def do_send():
+            req = TLRPC.TL_messages_sendMessage()
+            req.peer = peer
+            req.message = text
+            req.random_id = random.randint(0, 2**63 - 1)
+            req.no_webpage = True
+            cb = RequestCallback(lambda r, e: None)
+            self._keep(cb)
+            send_request(req, cb)
+        run_on_queue(do_send)
 
     # ---------- hooks ----------
 
@@ -319,10 +304,24 @@ class Plugin(BasePlugin):
             args = parts[1] if len(parts) > 1 else ""
 
             if cmd in (".tldr", ".tldrchat", ".tldrcmp"):
-                # заменяем сообщение на «анализирую...» и в фоне делаем запрос
-                params.message = "⏳ Анализирую..."
-                threading.Thread(target=self._do_analysis, args=(cmd, account, params, args), daemon=True).start()
-                return HookResult(strategy=HookStrategy.MODIFY, params=params)
+                peer = getattr(params, "peer", None)
+                reply_id = getattr(params, "reply_to_msg_id", None)
+                count = self._get_count()
+                for p in args.split():
+                    if p.isdigit():
+                        count = max(1, int(p))
+                        break
+
+                _peer = peer
+                _cmd = cmd
+                _args = args
+                _count = count
+                _reply_id = reply_id
+                _self = self
+
+                # Анализ в фоновом потоке (urllib работает из любого треда)
+                # send_request — через run_on_queue на главный тред
+                threading.Thread(target=lambda: _self._fetch_and_analyze(_cmd, _peer, _reply_id, _args, _count), daemon=True).start()
 
             elif cmd == ".kl":
                 threading.Thread(target=self._handle_kl, args=(account, params, args), daemon=True).start()
@@ -447,7 +446,9 @@ class Plugin(BasePlugin):
                 except Exception as e:
                     run_on_queue(lambda: BulletinHelper.show_error(f"AutoTLDR analysis: {e}"))
 
-            send_request(req, RequestCallback(on_history))
+            cb = RequestCallback(on_history)
+            self._keep(cb)
+            run_on_queue(lambda: send_request(req, cb))
 
         except Exception as e:
             run_on_queue(lambda: BulletinHelper.show_error(f"AutoTLDR fetch: {e}"))
@@ -581,7 +582,9 @@ class Plugin(BasePlugin):
                             return
                         plugin_self._process_keys(raw)
 
-                    send_request(req, RequestCallback(on_kl_msg))
+                    cb = RequestCallback(on_kl_msg)
+                    plugin_self._keep(cb)
+                    run_on_queue(lambda: send_request(req, cb))
                     return
 
             elif args.strip():
