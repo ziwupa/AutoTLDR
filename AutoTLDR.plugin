@@ -31,6 +31,11 @@ OR_MODELS = [
     "anthropic/claude-3-haiku",
 ]
 
+DS_MODELS = [
+    "deepseek-chat",
+    "deepseek-reasoner",
+]
+
 
 def call_gemini(api_key, model, prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -69,6 +74,22 @@ def call_openrouter(api_key, model, prompt):
     }
     req = urllib.request.Request(url, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data["choices"][0]["message"]["content"]
+
+
+def call_deepseek(api_key, model, prompt):
+    url = "https://api.deepseek.com/v1/chat/completions"
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    req = urllib.request.Request(url, data=body, headers=headers)
+    with urllib.request.urlopen(req, timeout=90) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data["choices"][0]["message"]["content"]
 
@@ -152,7 +173,7 @@ class Plugin(BasePlugin):
                 text="Провайдер",
                 icon="msg_customize",
                 default=0,
-                items=["Gemini", "OpenRouter"],
+                items=["Gemini", "OpenRouter", "DeepSeek"],
             ),
             Input(
                 key="gemini_api_key",
@@ -181,6 +202,20 @@ class Plugin(BasePlugin):
                 icon="msg_customize",
                 default=0,
                 items=OR_MODELS,
+            ),
+            Input(
+                key="deepseek_api_key",
+                text="DeepSeek API ключ",
+                icon="filled_key",
+                subtext="platform.deepseek.com/api_keys",
+                default="",
+            ),
+            Selector(
+                key="ds_model",
+                text="Модель DeepSeek",
+                icon="msg_customize",
+                default=0,
+                items=DS_MODELS,
             ),
             Header(text="Настройки анализа"),
             Input(
@@ -229,7 +264,7 @@ class Plugin(BasePlugin):
                         continue
                     raise
             raise RuntimeError(last_err or "Gemini: все ключи в лимите")
-        else:
+        elif provider == 1:
             keys = [k for k in self.get_setting("or_keys_pool", "").split("\n") if k.strip()]
             if not keys:
                 key = self.get_setting("openrouter_api_key", "")
@@ -252,6 +287,29 @@ class Plugin(BasePlugin):
                         continue
                     raise
             raise RuntimeError(last_err or "OpenRouter: все ключи в лимите")
+        else:
+            keys = [k for k in self.get_setting("ds_keys_pool", "").split("\n") if k.strip()]
+            if not keys:
+                key = self.get_setting("deepseek_api_key", "")
+                if not key:
+                    raise RuntimeError("DeepSeek API ключ не задан в настройках")
+                keys = [key]
+            model = DS_MODELS[self.get_setting("ds_model", 0)]
+            last_err = None
+            for i, k in enumerate(keys):
+                try:
+                    return call_deepseek(k, model, prompt)
+                except urllib.error.HTTPError as e:
+                    if e.code == 429:
+                        last_err = f"DeepSeek 429 (ключ #{i+1})"
+                        continue
+                    raise
+                except Exception as e:
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        last_err = f"DeepSeek 429 (ключ #{i+1})"
+                        continue
+                    raise
+            raise RuntimeError(last_err or "DeepSeek: все ключи в лимите")
 
     def on_send_message_hook(self, account, params):
         try:
@@ -386,6 +444,7 @@ class Plugin(BasePlugin):
                 # без реплая — сброс
                 self.set_setting("g_keys_pool", "")
                 self.set_setting("or_keys_pool", "")
+                self.set_setting("ds_keys_pool", "")
                 BulletinHelper.show_info("✅ AutoTLDR: пул ключей очищен")
                 return
 
@@ -412,13 +471,15 @@ class Plugin(BasePlugin):
                 # пустой реплай = сброс
                 self.set_setting("g_keys_pool", "")
                 self.set_setting("or_keys_pool", "")
+                self.set_setting("ds_keys_pool", "")
                 BulletinHelper.show_info("✅ AutoTLDR: пул ключей очищен")
                 return
 
             g_keys = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
             or_keys = re.findall(r"sk-or-v1-[0-9a-fA-F]{30,}", raw)
+            ds_keys = [k for k in re.findall(r"sk-[0-9a-zA-Z]{20,}", raw) if not k.startswith("sk-or-v1-")]
 
-            if not g_keys and not or_keys:
+            if not g_keys and not or_keys and not ds_keys:
                 BulletinHelper.show_error("AutoTLDR .kl: ключи не найдены")
                 return
 
@@ -435,8 +496,9 @@ class Plugin(BasePlugin):
 
             g_added, g_total = merge_pool("g_keys_pool", g_keys)
             or_added, or_total = merge_pool("or_keys_pool", or_keys)
+            ds_added, ds_total = merge_pool("ds_keys_pool", ds_keys)
             BulletinHelper.show_info(
-                f"✅ Gemini: +{g_added} (всего {g_total}) | OpenRouter: +{or_added} (всего {or_total})"
+                f"✅ Gemini: +{g_added} (всего {g_total}) | OR: +{or_added} (всего {or_total}) | DS: +{ds_added} (всего {ds_total})"
             )
 
         except Exception as e:
