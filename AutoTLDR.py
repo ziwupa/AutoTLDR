@@ -23,93 +23,93 @@ class AutoTLDRMod(loader.Module):
     strings = {
         "name": "AutoTLDR",
         "no_target": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>Ответь на сообщение, укажи @username или просто .tldr для анализа чата.</b>"
         ),
         "no_key": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>API-ключ для провайдера <code>{provider}</code> не задан в конфиге.</b>"
         ),
         "no_msgs": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>У {name} нет текстовых сообщений в этом чате.</b>"
         ),
         "no_msgs_chat": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>В этом чате нет текстовых сообщений.</b>"
         ),
         "user_not_found": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>Пользователь <code>{user}</code> не найден.</b>"
         ),
         "collecting": (
-            "<emoji document_id=5451732530048802485>⏳</emoji> "
+            "⏳ "
             "<b>Собираю сообщения {name}...</b>"
         ),
         "collecting_chat": (
-            "<emoji document_id=5451732530048802485>⏳</emoji> "
+            "⏳ "
             "<b>Собираю последние сообщения чата...</b>"
         ),
         "analyzing": (
-            "<emoji document_id=5451732530048802485>⏳</emoji> "
+            "⏳ "
             "<b>Анализирую {count} сообщений {name}...</b>"
         ),
         "analyzing_chat": (
-            "<emoji document_id=5451732530048802485>⏳</emoji> "
+            "⏳ "
             "<b>Анализирую {count} сообщений чата...</b>"
         ),
         "header_user": (
-            "<emoji document_id=5215493672150684239>🧠</emoji> "
+            "🧠 "
             "<b>Разбор <a href=\"tg://user?id={sender_id}\">{name}</a></b>"
             " <i>(по {count} сообщ.)</i>\n\n"
         ),
         "header_chat": (
-            "<emoji document_id=5215493672150684239>🧠</emoji> "
+            "🧠 "
             "<b>О чём щас чат</b> <i>(по {count} сообщ.)</i>\n\n"
         ),
         "blocked": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>Gemini заблокировал ответ (фильтр безопасности).</b>"
             "<i> Возможно, в сообщениях слишком жёсткий контент.</i>"
         ),
         "error": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>Ошибка:</b> <code>{error}</code>"
         ),
         "kl_no_reply": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>Ответь .kl на сообщение/файл со списком ключей.</b>"
         ),
         "kl_added": (
-            "<emoji document_id=5197688912457245639>✅</emoji> "
+            "✅ "
             "<b>Gemini:</b> +<code>{g_added}</code> (всего <code>{g_total}</code>)"
             " | дублей: <code>{g_dupes}</code>\n"
             "<b>OpenRouter:</b> +<code>{or_added}</code> (всего <code>{or_total}</code>)"
             " | дублей: <code>{or_dupes}</code>"
         ),
         "kl_no_keys": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>В сообщении не найдено Gemini/OpenRouter ключей.</b>"
         ),
         "kl_cleared": (
-            "<emoji document_id=5197688912457245639>✅</emoji> "
+            "✅ "
             "<b>Файлы ключей очищены.</b>"
         ),
         "cmp_no_targets": (
-            "<emoji document_id=5210952531676504517>🚫</emoji> "
+            "🚫 "
             "<b>Укажи двух людей: .tldrcmp @user1 @user2 [кол-во]</b>\n"
             "<i>Или ответь на сообщение первого + .tldrcmp @user2</i>"
         ),
         "cmp_collecting": (
-            "<emoji document_id=5451732530048802485>⏳</emoji> "
+            "⏳ "
             "<b>Собираю {name1} ({c1}...) и {name2} ({c2}...)...</b>"
         ),
         "cmp_analyzing": (
-            "<emoji document_id=5451732530048802485>⏳</emoji> "
+            "⏳ "
             "<b>Сравниваю {name1} ({c1} сообщ.) и {name2} ({c2} сообщ.)...</b>"
         ),
         "cmp_header": (
-            "<emoji document_id=5215493672150684239>🧠</emoji> "
+            "🧠 "
             "<b><a href=\"tg://user?id={sid1}\">{name1}</a>"
             " vs "
             "<a href=\"tg://user?id={sid2}\">{name2}</a></b>"
@@ -518,7 +518,7 @@ class AutoTLDRMod(loader.Module):
             line = line.replace("&lt;/a&gt;", "</a>")
             line = re.sub(r"&lt;a\s+([^&]+)&gt;", r"<a \1>", line)
             lines.append(line)
-        return "\n".join(f"> {l}" for l in lines)
+        return "\n".join(f"<blockquote>{l}</blockquote>" for l in lines)
 
     @staticmethod
     def _linkify_names(text: str, senders: dict) -> str:
