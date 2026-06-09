@@ -1,3 +1,9 @@
+# id: autotldr
+# name: AutoTLDR
+# description: AI-анализ чата и пользователей через Gemini/OpenRouter/DeepSeek. .tldr, .tldrchat, .tldrcmp, .kl
+# author: zetmodules
+# version: 1.0
+
 # -*- coding: utf-8 -*-
 # meta developer: @zetmodules
 
