@@ -588,7 +588,11 @@ class AutoTLDRMod(loader.Module):
                         headers = {"Authorization": f"Bearer {k}", "Content-Type": "application/json"}
                         async with aiohttp.ClientSession() as s:
                             async with s.post(url, json=payload, headers=headers) as r:
-                                data = await r.json()
+                                try:
+                                    data = await r.json(content_type=None)
+                                except Exception:
+                                    text = await r.text()
+                                    data = {"error": text[:300]}
                         if r.status == 200:
                             self._key_idx = (idx + 1) % n
                             return data["choices"][0]["message"]["content"]
@@ -614,7 +618,11 @@ class AutoTLDRMod(loader.Module):
             }
             async with aiohttp.ClientSession() as s:
                 async with s.post(url, json=payload, headers=headers) as r:
-                    data = await r.json()
+                    try:
+                        data = await r.json(content_type=None)
+                    except Exception:
+                        text = await r.text()
+                        raise RuntimeError(f"{provider} {r.status}: {text[:300]}")
                     if r.status != 200:
                         raise RuntimeError(f"{provider} {r.status}: {data}")
                     return data["choices"][0]["message"]["content"]
