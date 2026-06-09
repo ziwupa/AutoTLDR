@@ -183,12 +183,47 @@ class AutoTLDRMod(loader.Module):
                 doc="Разрешить AI материться, если в чате треш",
                 validator=loader.validators.Boolean(),
             ),
+            loader.ConfigValue(
+                "custom_emojis",
+                False,
+                doc="Кастомные эмодзи (требует Premium). Отключены по умолчанию для совместимости.",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    def _e(self, doc_id: str, fallback: str) -> str:
+        """Эмодзи: кастомный если вкл, иначе обычный Unicode."""
+        if self.config["custom_emojis"]:
+            return f'<emoji document_id={doc_id}>{fallback}</emoji>'
+        return fallback
 
     async def client_ready(self, client, db):
         self._client = client
         self._key_idx = 0
         self._sender_cache = {}
+        self._emoji_map = {
+            "🚫": "5210952531676504517",
+            "⏳": "5451732530048802485",
+            "🧠": "5215493672150684239",
+            "✅": "5197688912457245639",
+        }
+
+    def _emojify(self, text: str) -> str:
+        """Если custom_emojis=True — заменяет Unicode на <emoji> теги."""
+        if not self.config["custom_emojis"]:
+            return text
+        for char, doc_id in self._emoji_map.items():
+            text = text.replace(
+                char,
+                f"<emoji document_id={doc_id}>{char}</emoji>",
+            )
+        return text
+
+    def _s(self, key, **fmt):
+        text = self.strings(key)
+        if fmt:
+            text = text.format(**fmt)
+        return self._emojify(text)
 
     # ---------- keys ----------
 
@@ -391,7 +426,7 @@ class AutoTLDRMod(loader.Module):
             key = self.config["gemini_api_key"]
             if not key:
                 raise RuntimeError(
-                    self.strings("no_key").format(provider="gemini")
+                    self._s("no_key", provider="gemini")
                 )
             status, data = await self._gemini_call(key, model, payload)
             if status != 200:
@@ -445,7 +480,7 @@ class AutoTLDRMod(loader.Module):
             if not pool:
                 key = self.config["openrouter_api_key"]
                 if not key:
-                    raise RuntimeError(self.strings("no_key").format(provider=provider))
+                    raise RuntimeError(self._s("no_key", provider=provider))
                 status, data = await self._or_call(key, model, payload, extra)
                 if status != 200:
                     raise RuntimeError(f"{provider} {status}: {data}")
@@ -473,7 +508,7 @@ class AutoTLDRMod(loader.Module):
             model = self.config["openai_model"]
             provider = "openai"
             if not key:
-                raise RuntimeError(self.strings("no_key").format(provider=provider))
+                raise RuntimeError(self._s("no_key", provider=provider))
             payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -721,7 +756,7 @@ class AutoTLDRMod(loader.Module):
                     break
             return await utils.answer(
                 message,
-                self.strings("user_not_found").format(
+                self._s("user_not_found", 
                     user=utils.escape_html(username)
                 ),
             )
@@ -749,7 +784,7 @@ class AutoTLDRMod(loader.Module):
         """Reply to a message or file with API keys — add them to the pool"""
         reply = await message.get_reply_message()
         if not reply:
-            return await utils.answer(message, self.strings("kl_no_reply"))
+            return await utils.answer(message, self._s("kl_no_reply"))
 
         raw = ""
 
@@ -789,12 +824,12 @@ class AutoTLDRMod(loader.Module):
 
             clear_file("keys_file")
             clear_file("or_keys_file")
-            return await utils.answer(message, self.strings("kl_cleared"))
+            return await utils.answer(message, self._s("kl_cleared"))
 
         new_g = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
         new_or = re.findall(r"sk-or-v1-[0-9a-fA-F]{30,}", raw)
         if not new_g and not new_or:
-            return await utils.answer(message, self.strings("kl_no_keys"))
+            return await utils.answer(message, self._s("kl_no_keys"))
 
         def add_to_file(file_cfg, pattern, new_keys):
             path = os.path.join(os.getcwd(), self.config[file_cfg])
@@ -827,7 +862,7 @@ class AutoTLDRMod(loader.Module):
 
         await utils.answer(
             message,
-            self.strings("kl_added").format(
+            self._s("kl_added", 
                 g_added=g_added, g_dupes=g_dupes, g_total=g_total,
                 or_added=or_added, or_dupes=or_dupes, or_total=or_total,
             ),
@@ -871,11 +906,11 @@ class AutoTLDRMod(loader.Module):
             except Exception:
                 return await utils.answer(
                     message,
-                    self.strings("user_not_found").format(user=utils.escape_html(usernames[0])),
+                    self._s("user_not_found", user=utils.escape_html(usernames[0])),
                 )
 
         if not target1 or not usernames:
-            return await utils.answer(message, self.strings("cmp_no_targets"))
+            return await utils.answer(message, self._s("cmp_no_targets"))
 
         # цель 2: следующий юзернейм
         target2 = None
@@ -887,7 +922,7 @@ class AutoTLDRMod(loader.Module):
         except Exception:
             return await utils.answer(
                 message,
-                self.strings("user_not_found").format(user=utils.escape_html(usernames[0])),
+                self._s("user_not_found", user=utils.escape_html(usernames[0])),
             )
 
         sid1, raw1, un1, name1 = target1
@@ -895,7 +930,7 @@ class AutoTLDRMod(loader.Module):
 
         msg = await utils.answer(
             message,
-            self.strings("cmp_collecting").format(
+            self._s("cmp_collecting", 
                 name1=name1, c1="...", name2=name2, c2="..."
             ),
         )
@@ -904,14 +939,14 @@ class AutoTLDRMod(loader.Module):
         msgs2 = await self._collect_user_msgs(message.chat_id, sid2, count)
 
         if not msgs1 and not msgs2:
-            return await utils.answer(msg, self.strings("no_msgs").format(name=f"{name1} + {name2}"))
+            return await utils.answer(msg, self._s("no_msgs", name=f"{name1} + {name2}"))
 
         num1 = [f"{i + 1}. {t}" for i, t in enumerate(msgs1)]
         num2 = [f"{i + 1}. {t}" for i, t in enumerate(msgs2)]
 
         await utils.answer(
             msg,
-            self.strings("cmp_analyzing").format(
+            self._s("cmp_analyzing", 
                 name1=name1, c1=len(msgs1), name2=name2, c2=len(msgs2)
             ),
         )
@@ -923,13 +958,13 @@ class AutoTLDRMod(loader.Module):
         except Exception as e:
             return await self._safe_answer(
                 msg,
-                self.strings("error").format(error=utils.escape_html(str(e))),
+                self._s("error", error=utils.escape_html(str(e))),
                 fallback_text="сравнение",
             )
 
         body = self._sanitize(raw)
         body = self._linkify_names(body, {sid1: raw1, sid2: raw2})
-        header = self.strings("cmp_header").format(
+        header = self._s("cmp_header", 
             name1=name1, name2=name2, c1=len(msgs1), c2=len(msgs2),
             sid1=sid1, sid2=sid2,
         )
@@ -939,7 +974,7 @@ class AutoTLDRMod(loader.Module):
         self, message, sender_id, raw_name, username, display_name, count
     ):
         msg = await utils.answer(
-            message, self.strings("collecting").format(name=display_name)
+            message, self._s("collecting", name=display_name)
         )
 
         msgs = await self._collect_user_msgs(
@@ -948,14 +983,14 @@ class AutoTLDRMod(loader.Module):
 
         if not msgs:
             return await utils.answer(
-                msg, self.strings("no_msgs").format(name=display_name)
+                msg, self._s("no_msgs", name=display_name)
             )
 
         numbered = [f"{i + 1}. {t}" for i, t in enumerate(msgs)]
 
         await utils.answer(
             msg,
-            self.strings("analyzing").format(name=display_name, count=len(msgs)),
+            self._s("analyzing", name=display_name, count=len(msgs)),
         )
 
         try:
@@ -965,30 +1000,30 @@ class AutoTLDRMod(loader.Module):
         except Exception as e:
             return await self._safe_answer(
                 msg,
-                self.strings("error").format(error=utils.escape_html(str(e))),
+                self._s("error", error=utils.escape_html(str(e))),
                 fallback_text="ошибка",
             )
 
         body = self._sanitize(raw)
         body = self._linkify_names(body, {sender_id: raw_name})
-        header = self.strings("header_user").format(
+        header = self._s("header_user", 
             name=display_name, count=len(msgs), sender_id=sender_id
         )
         await self._safe_answer(msg, header + body, fallback_text=display_name)
 
     async def _do_chat_analysis(self, message, count):
-        msg = await utils.answer(message, self.strings("collecting_chat"))
+        msg = await utils.answer(message, self._s("collecting_chat"))
 
         msgs, senders = await self._collect_chat_msgs(message.chat_id, count)
 
         if not msgs:
-            return await utils.answer(msg, self.strings("no_msgs_chat"))
+            return await utils.answer(msg, self._s("no_msgs_chat"))
 
         numbered = [f"{i + 1}. {t}" for i, t in enumerate(msgs)]
 
         await utils.answer(
             msg,
-            self.strings("analyzing_chat").format(count=len(msgs)),
+            self._s("analyzing_chat", count=len(msgs)),
         )
 
         try:
@@ -996,11 +1031,11 @@ class AutoTLDRMod(loader.Module):
         except Exception as e:
             return await self._safe_answer(
                 msg,
-                self.strings("error").format(error=utils.escape_html(str(e))),
+                self._s("error", error=utils.escape_html(str(e))),
                 fallback_text="ошибка",
             )
 
         body = self._sanitize(raw)
         body = self._linkify_names(body, senders)
-        header = self.strings("header_chat").format(count=len(msgs))
+        header = self._s("header_chat", count=len(msgs))
         await self._safe_answer(msg, header + body, fallback_text="чат")
