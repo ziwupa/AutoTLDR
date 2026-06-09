@@ -15,23 +15,21 @@ import urllib.error
 import random
 from typing import Any
 
-from base_plugin import BasePlugin, HookResult, HookStrategy
+from base_plugin import BasePlugin, MethodHook
 from ui.bulletin import BulletinHelper
 from ui.settings import Header, Input, Switch, Selector
 from client_utils import get_last_fragment
-from org.telegram.messenger import ApplicationLoader
-
+from org.telegram.messenger import ApplicationLoader, SendMessagesHelper
+from java.lang import Long
 
 GEMINI_MODELS = [
-    "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.5-flash",
-    "gemini-2.5-pro", "gemini-2.5-flash",
+    "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"
 ]
 OR_MODELS = [
-    "openai/gpt-4o-mini", "openai/gpt-4o",
-    "google/gemini-3-flash-preview", "anthropic/claude-3-haiku",
+    "openai/gpt-4o-mini", "openai/gpt-4o", "google/gemini-2.5-flash", "anthropic/claude-3-haiku"
 ]
 DS_MODELS = [
-    "deepseek-chat-v4-pro", "deepseek-chat", "deepseek-reasoner",
+    "deepseek-chat", "deepseek-reasoner"
 ]
 
 
@@ -125,6 +123,51 @@ def format_msg(msg):
     return text or None
 
 
+class SendMessageHook(MethodHook):
+    def __init__(self, plugin):
+        super().__init__()
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            text = str(param.args[0]).strip()
+            chat_id = int(param.args[1])
+            reply_obj = param.args[2]
+            reply_id = getattr(reply_obj, "reply_to_msg_id", 0) if reply_obj else 0
+
+            parts = text.split(maxsplit=1)
+            if not parts: return
+            cmd = parts[0].lower()
+            args = parts[1] if len(parts) > 1 else ""
+
+            if cmd in [".tldr", ".tldrchat", ".tldrcmp", ".kl"]:
+                param.setResult(None)
+
+                client = getattr(self.plugin, "_client", None)
+                if not client:
+                    try:
+                        client = get_last_fragment().getAccountInstance().getConnectionsManager()
+                    except:
+                        pass
+
+                try:
+                    count = int(self.plugin.get_setting("default_count", "100"))
+                except:
+                    count = 100
+
+                if cmd == ".kl":
+                    self.plugin.handle_kl(client, chat_id, reply_id)
+                else:
+                    threading.Thread(
+                        target=self.plugin.run_analysis,
+                        args=(client, cmd, chat_id, reply_id, args, count),
+                        daemon=True
+                    ).start()
+
+        except Exception as e:
+            self.plugin.log(f"Hook error: {e}")
+
+
 class Plugin(BasePlugin):
     _client = None
 
@@ -140,6 +183,14 @@ class Plugin(BasePlugin):
 
     def on_plugin_load(self):
         self.log(f"AutoTLDR v{__version__} loaded")
+        try:
+            for m in SendMessagesHelper.getClass().getDeclaredMethods():
+                if m.getName() == "sendMessage" and m.getParameterTypes()[0].getName() == "java.lang.String":
+                    self.hook_method(m, SendMessageHook(self))
+                    self.log("SendMessageHook successfully injected!")
+                    break
+        except Exception as e:
+            self.log(f"Failed to hook sendMessage: {e}")
 
     def create_settings(self):
         return [
@@ -193,11 +244,11 @@ class Plugin(BasePlugin):
 
     @property
     def _hardcore(self):
-        return self.get_setting("provider", 0) == 2  # DeepSeek
+        return self.get_setting("provider", 0) == 2
 
     def _ai_call(self, prompt):
         prov = self.get_setting("provider", 0)
-        if prov == 0:  # Gemini
+        if prov == 0:
             pool = self._load_pool("g_keys.txt", r"AIza[0-9A-Za-z_-]{15,}")
             if not pool:
                 k = self.get_setting("gemini_api_key", "")
@@ -213,11 +264,11 @@ class Plugin(BasePlugin):
                     return r
                 except Exception as e:
                     if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        last = f"Gemini 429 (#{idx+1})"; continue
+                        last = f"Gemini 429 (# {idx+1})"; continue
                     raise
-            raise RuntimeError(last or "Gemini: лимит")
+            raise RuntimeError(last or "Gemini: все ключи в лимите")
 
-        elif prov == 1:  # OpenRouter
+        elif prov == 1:
             pool = self._load_pool("or_keys.txt", r"sk-or-v1-[0-9a-fA-F]{30,}")
             if not pool:
                 k = self.get_setting("or_api_key", "")
@@ -232,11 +283,11 @@ class Plugin(BasePlugin):
                     self._key_idx = (idx + 1) % len(pool)
                     return r
                 except Exception as e:
-                    if "429" in str(e): last = f"OR 429 (#{idx+1})"; continue
+                    if "429" in str(e): last = f"OR 429 (# {idx+1})"; continue
                     raise
-            raise RuntimeError(last or "OR: лимит")
+            raise RuntimeError(last or "OR: все ключи в лимите")
 
-        else:  # DeepSeek
+        else:
             pool = self._load_pool("ds_keys.txt", r"sk-[0-9a-zA-Z]{20,}")
             if not pool:
                 k = self.get_setting("ds_api_key", "")
@@ -251,9 +302,9 @@ class Plugin(BasePlugin):
                     self._key_idx = (idx + 1) % len(pool)
                     return r
                 except Exception as e:
-                    if "429" in str(e): last = f"DS 429 (#{idx+1})"; continue
+                    if "429" in str(e): last = f"DS 429 (# {idx+1})"; continue
                     raise
-            raise RuntimeError(last or "DS: лимит")
+            raise RuntimeError(last or "DS: все ключи в лимите")
 
     # ===== Prompts =====
 
@@ -304,16 +355,12 @@ class Plugin(BasePlugin):
             f"\n\n{n2}:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(c2))
         )
 
-    # ===== Analysis entry point (called from outside) =====
+    # ===== Analysis entry point =====
 
     def run_analysis(self, client, cmd, chat_id, reply_id, args, count):
-        """Запускается в фоновом потоке. client — Telethon-клиент."""
-
-        # 1) Статус-сообщение
-        status = client.send_message(chat_id, "⏳ <b>Собираю...</b>",
+        status = client.send_message(chat_id, "\u23f3 <b>Собираю...</b>",
                                      reply_to=reply_id or None, parse_mode="html")
         if not status: return
-        status_id = status.id
 
         def upd(text):
             try:
@@ -324,7 +371,6 @@ class Plugin(BasePlugin):
                 except: pass
 
         try:
-            # 2) Фетч истории
             limit = min(count * 3, 300)
             msgs = list(client.iter_messages(chat_id, limit=limit))
             msgs.reverse()
@@ -342,7 +388,6 @@ class Plugin(BasePlugin):
                         senders[sid] = str(sid)
 
             if cmd == ".tldrchat" or (cmd == ".tldr" and not reply_id):
-                # Чат
                 collected = []
                 for m in msgs:
                     if len(collected) >= count: break
@@ -352,25 +397,25 @@ class Plugin(BasePlugin):
                     name = senders.get(sid, str(sid))
                     collected.append(f"[{name}]: {body}")
                 if not collected:
-                    upd("🚫 Нет сообщений.")
+                    upd("\U0001f6ab \u041d\u0435\u0442 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439.")
                     return
-                upd(f"⏳ <b>Анализирую {len(collected)} сообщ. чата...</b>")
+                upd(f"\u23f3 <b>\u0410\u043d\u0430\u043b\u0438\u0437\u0438\u0440\u0443\u044e {len(collected)} \u0441\u043e\u043e\u0431\u0449. \u0447\u0430\u0442\u0430...</b>")
                 prompt = self._prompt_chat(collected)
                 raw = self._ai_call(prompt)
                 body = sanitize(raw); body = linkify_names(body, senders)
-                upd(f"🧠 <b>О чём щас чат</b> <i>(по {len(collected)} сообщ.)</i>\n\n{body}")
+                upd(f"\U0001f9e0 <b>\u041e \u0447\u0451\u043c \u0449\u0430\u0441 \u0447\u0430\u0442</b> <i>(\u043f\u043e {len(collected)} \u0441\u043e\u043e\u0431\u0449.)</i>\n\n{body}")
 
             elif cmd == ".tldrcmp":
                 targets = [p.lstrip("@") for p in args.split() if p.startswith("@")]
                 if len(targets) < 2:
-                    upd("🚫 Укажи двух: .tldrcmp @a @b"); return
+                    upd("\U0001f6ab \u0423\u043a\u0430\u0436\u0438 \u0434\u0432\u0443\u0445: .tldrcmp @a @b"); return
                 u1 = u2 = 0
                 for sid, name in senders.items():
                     nl = name.lower()
                     if targets[0].lower() in nl: u1 = sid
                     if targets[1].lower() in nl: u2 = sid
                 if not u1 or not u2:
-                    upd("🚫 Юзеры не найдены."); return
+                    upd("\U0001f6ab \u042e\u0437\u0435\u0440\u044b \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u044b."); return
                 c1, c2 = [], []
                 for m in msgs:
                     sid = getattr(m, "sender_id", 0)
@@ -379,14 +424,13 @@ class Plugin(BasePlugin):
                     if sid == u1 and len(c1) < count: c1.append(body)
                     elif sid == u2 and len(c2) < count: c2.append(body)
                 n1, n2 = senders[u1], senders[u2]
-                upd(f"⏳ <b>Сравниваю {n1} ({len(c1)}) и {n2} ({len(c2)})...</b>")
+                upd(f"\u23f3 <b>\u0421\u0440\u0430\u0432\u043d\u0438\u0432\u0430\u044e {n1} ({len(c1)}) \u0438 {n2} ({len(c2)})...</b>")
                 prompt = self._prompt_cmp(n1, n2, c1, c2)
                 raw = self._ai_call(prompt)
                 body = sanitize(raw); body = linkify_names(body, {u1: n1, u2: n2})
-                upd(f"🧠 <b>{n1} vs {n2}</b> <i>(по {len(c1)} и {len(c2)} сообщ.)</i>\n\n{body}")
+                upd(f"\U0001f9e0 <b>{n1} vs {n2}</b> <i>(\u043f\u043e {len(c1)} \u0438 {len(c2)} \u0441\u043e\u043e\u0431\u0449.)</i>\n\n{body}")
 
             else:
-                # Юзер
                 target = 0
                 if reply_id:
                     for m in msgs:
@@ -400,7 +444,7 @@ class Plugin(BasePlugin):
                                     target = sid; break
                             break
                 if not target:
-                    upd("🚫 Юзер не найден."); return
+                    upd("\U0001f6ab \u042e\u0437\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."); return
                 collected = []
                 for m in msgs:
                     if getattr(m, "sender_id", 0) != target: continue
@@ -408,21 +452,20 @@ class Plugin(BasePlugin):
                     body = format_msg(m)
                     if body: collected.append(body)
                 if not collected:
-                    upd("🚫 Нет сообщений."); return
+                    upd("\U0001f6ab \u041d\u0435\u0442 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439."); return
                 name = senders.get(target, str(target))
-                upd(f"⏳ <b>Анализирую {len(collected)} сообщ. {name}...</b>")
+                upd(f"\u23f3 <b>\u0410\u043d\u0430\u043b\u0438\u0437\u0438\u0440\u0443\u044e {len(collected)} \u0441\u043e\u043e\u0431\u0449. {name}...</b>")
                 prompt = self._prompt_user(name, collected)
                 raw = self._ai_call(prompt)
                 body = sanitize(raw); body = linkify_names(body, {target: name})
-                upd(f"🧠 <b>Разбор {name}</b> <i>(по {len(collected)} сообщ.)</i>\n\n{body}")
+                upd(f"\U0001f9e0 <b>\u0420\u0430\u0437\u0431\u043e\u0440 {name}</b> <i>(\u043f\u043e {len(collected)} \u0441\u043e\u043e\u0431\u0449.)</i>\n\n{body}")
 
         except Exception as e:
-            upd(f"🚫 <b>Ошибка:</b> <code>{str(e)}</code>")
+            upd(f"\U0001f6ab <b>\u041e\u0448\u0438\u0431\u043a\u0430:</b> <code>{str(e)}</code>")
 
     # ===== .kl =====
 
     def handle_kl(self, client, chat_id, reply_id):
-        """Обработчик .kl — вызывается из хука отправки сообщений."""
         if reply_id:
             msg = client.get_messages(chat_id, ids=[reply_id])
             if msg and msg[0]:
@@ -441,21 +484,21 @@ class Plugin(BasePlugin):
                         if os.path.isfile(p):
                             try: open(p, "w").close()
                             except: pass
-                    client.send_message(chat_id, "✅ Пул ключей очищен.", reply_to=reply_id)
+                    client.send_message(chat_id, "\u2705 \u041f\u0443\u043b \u043a\u043b\u044e\u0447\u0435\u0439 \u043e\u0447\u0438\u0449\u0435\u043d.", reply_to=reply_id)
                     return
                 self._process_keys(raw, client, chat_id, reply_id)
         else:
-            client.send_message(chat_id, "🚫 Ответь .kl на сообщение с ключами.")
+            client.send_message(chat_id, "\U0001f6ab \u041e\u0442\u0432\u0435\u0442\u044c .kl \u043d\u0430 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0441 \u043a\u043b\u044e\u0447\u0430\u043c\u0438.")
 
     def _process_keys(self, raw, client, chat_id, reply_id):
         g = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
         o = re.findall(r"sk-or-v1-[0-9a-fA-F]{30,}", raw)
         d = [k for k in re.findall(r"sk-[0-9a-zA-Z]{20,}", raw) if not k.startswith("sk-or-v1-")]
         if not g and not o and not d:
-            client.send_message(chat_id, "🚫 Ключи не найдены.", reply_to=reply_id); return
+            client.send_message(chat_id, "\U0001f6ab \u041a\u043b\u044e\u0447\u0438 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u044b.", reply_to=reply_id); return
         ga, gt = self._save_pool("g_keys.txt", g)
         oa, ot = self._save_pool("or_keys.txt", o)
         da, dt = self._save_pool("ds_keys.txt", d)
         client.send_message(chat_id,
-            f"✅ G: +{ga}({gt}) | OR: +{oa}({ot}) | DS: +{da}({dt})",
+            f"\u2705 G: +{ga}({gt}) | OR: +{oa}({ot}) | DS: +{da}({dt})",
             reply_to=reply_id, parse_mode="html")
