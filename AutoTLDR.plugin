@@ -1,8 +1,8 @@
 __id__ = "autotldr"
 __name__ = "🧠 AutoTLDR"
-__description__ = "AI-анализ чата и пользователей через Gemini/OpenRouter. .tldr @user, .tldrchat, .tldrcmp, .kl"
+__description__ = "Управление пулом API-ключей для AutoTLDR. .kl — добавить/очистить ключи Gemini/OpenRouter/DeepSeek. Анализ чата — в Heroku-версии модуля."
 __author__ = "@zetmodules"
-__version__ = "1.0"
+__version__ = "1.1"
 __icon__ = "msg_photo_text_regular"
 __min_version__ = "11.12.0"
 
@@ -322,13 +322,7 @@ class Plugin(BasePlugin):
             cmd = parts[0].lower() if parts else ""
             args = parts[1] if len(parts) > 1 else ""
 
-            if cmd == ".tldr":
-                threading.Thread(target=self._handle_tldr, args=(account, params, args), daemon=True).start()
-            elif cmd == ".tldrchat":
-                threading.Thread(target=self._handle_tldrchat, args=(account, params, args), daemon=True).start()
-            elif cmd == ".tldrcmp":
-                threading.Thread(target=self._handle_tldrcmp, args=(account, params, args), daemon=True).start()
-            elif cmd == ".kl":
+            if cmd == ".kl":
                 threading.Thread(target=self._handle_kl, args=(account, params, args), daemon=True).start()
 
         except Exception as e:
