@@ -1,0 +1,423 @@
+__id__ = "autotldr"
+__name__ = "🧠 AutoTLDR"
+__description__ = "AI-анализ чата и пользователей через Gemini/OpenRouter. .tldr @user, .tldrchat, .tldrcmp, .kl"
+__author__ = "@ziwupa"
+__version__ = "1.0"
+__icon__ = "msg_photo_text_regular"
+__min_version__ = "11.12.0"
+
+import re
+import json
+import threading
+import urllib.request
+import urllib.error
+from base_plugin import BasePlugin, HookResult, HookStrategy, MenuItemData, MenuItemType
+from ui.bulletin import BulletinHelper
+from ui.settings import Header, Input, Divider, Switch, Selector, Text
+
+
+GEMINI_MODELS = [
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+]
+
+OR_MODELS = [
+    "openai/gpt-4o-mini",
+    "openai/gpt-4o",
+    "google/gemini-3-flash-preview",
+    "anthropic/claude-3-haiku",
+]
+
+
+def call_gemini(api_key, model, prompt):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt[:90000]}]}],
+        "safetySettings": [
+            {"category": c, "threshold": "BLOCK_NONE"}
+            for c in (
+                "HARM_CATEGORY_HARASSMENT",
+                "HARM_CATEGORY_HATE_SPEECH",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "HARM_CATEGORY_DANGEROUS_CONTENT",
+            )
+        ],
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    c0 = data["candidates"][0]
+    if c0.get("finishReason", "STOP") != "STOP":
+        raise RuntimeError(f"Gemini blocked: {c0['finishReason']}")
+    return c0["content"]["parts"][0]["text"]
+
+
+def call_openrouter(api_key, model, prompt):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ziwupa/AutoTLDR",
+        "X-Title": "Extragram AutoTLDR",
+    }
+    req = urllib.request.Request(url, data=body, headers=headers)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data["choices"][0]["message"]["content"]
+
+
+def sanitize(text):
+    text = re.sub(r"```[a-zA-Z]*", "", text).replace("```", "").strip()
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    from html import escape
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-*•]\s*", "", line)
+        line = escape(line)
+        line = line.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+        lines.append(line)
+    return "\n".join(f"<blockquote>{l}</blockquote>" for l in lines)
+
+
+def format_msg(msg) -> str:
+    text = getattr(msg, "message", "") or ""
+    text = text.strip().replace("\n", " ")
+    media = []
+    if getattr(msg, "media", None):
+        mc = str(type(msg.media).__name__)
+        if "Photo" in mc:
+            media.append("[фото]")
+        elif "Document" in mc:
+            for attr in getattr(msg.media, "attributes", []) or []:
+                an = str(type(attr).__name__)
+                if "Sticker" in an:
+                    media.append("[стикер]")
+                    break
+                elif "Video" in an:
+                    media.append("[видео]")
+                    break
+                elif "Audio" in an:
+                    media.append("[аудио]")
+                    break
+                elif "Voice" in an:
+                    media.append("[голосовое]")
+                    break
+            else:
+                media.append("[документ]")
+        elif "Geo" in mc:
+            media.append("[гео]")
+        elif "Poll" in mc:
+            media.append("[опрос]")
+        elif "Contact" in mc:
+            media.append("[контакт]")
+    if text and media:
+        return f"{text} {' '.join(media)}"
+    if media:
+        return " ".join(media)
+    return text or None
+
+
+def get_display(entity):
+    name = getattr(entity, "first_name", "") or ""
+    last = getattr(entity, "last_name", "") or ""
+    if name and last:
+        return f"{name} {last}"
+    if name:
+        return name
+    return getattr(entity, "title", "") or str(getattr(entity, "id", "?"))
+
+
+class Plugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+
+    def create_settings(self):
+        return [
+            Header(text="AI Провайдер"),
+            Selector(
+                key="provider",
+                text="Провайдер",
+                icon="msg_customize",
+                default=0,
+                items=["Gemini", "OpenRouter"],
+            ),
+            Input(
+                key="gemini_api_key",
+                text="Gemini API ключ",
+                icon="filled_key",
+                subtext="aistudio.google.com/apikey",
+                default="",
+            ),
+            Selector(
+                key="gemini_model",
+                text="Модель Gemini",
+                icon="msg_customize",
+                default=0,
+                items=GEMINI_MODELS,
+            ),
+            Input(
+                key="openrouter_api_key",
+                text="OpenRouter API ключ",
+                icon="filled_key",
+                subtext="openrouter.ai/keys",
+                default="",
+            ),
+            Selector(
+                key="or_model",
+                text="Модель OpenRouter",
+                icon="msg_customize",
+                default=0,
+                items=OR_MODELS,
+            ),
+            Header(text="Настройки анализа"),
+            Input(
+                key="default_count",
+                text="Кол-во сообщений",
+                icon="list_reorder",
+                subtext="По умолчанию 100",
+                default="100",
+            ),
+            Switch(
+                key="allow_swearing",
+                text="Разрешить мат",
+                icon="msg_emoji_devil",
+                default=True,
+            ),
+        ]
+
+    def _get_count(self):
+        try:
+            return max(1, int(self.get_setting("default_count", "100")))
+        except Exception:
+            return 100
+
+    def _ai_call(self, prompt):
+        provider = self.get_setting("provider", 0)
+        if provider == 0:
+            key = self.get_setting("gemini_api_key", "")
+            if not key:
+                raise RuntimeError("Gemini API ключ не задан в настройках")
+            model = GEMINI_MODELS[self.get_setting("gemini_model", 0)]
+            return call_gemini(key, model, prompt)
+        else:
+            key = self.get_setting("openrouter_api_key", "")
+            if not key:
+                raise RuntimeError("OpenRouter API ключ не задан в настройках")
+            model = OR_MODELS[self.get_setting("or_model", 0)]
+            return call_openrouter(key, model, prompt)
+
+    def on_send_message_hook(self, account, params):
+        try:
+            text = params.message or params.caption or ""
+            if not text.strip():
+                return HookResult(strategy=HookStrategy.DEFAULT)
+
+            # парсим команды
+            parts = text.strip().split(maxsplit=1)
+            cmd = parts[0].lower() if parts else ""
+            args = parts[1] if len(parts) > 1 else ""
+
+            if cmd == ".tldr":
+                threading.Thread(target=self._handle_tldr, args=(account, params, args), daemon=True).start()
+            elif cmd == ".tldrchat":
+                threading.Thread(target=self._handle_tldrchat, args=(account, params, args), daemon=True).start()
+            elif cmd == ".tldrcmp":
+                threading.Thread(target=self._handle_tldrcmp, args=(account, params, args), daemon=True).start()
+
+        except Exception as e:
+            BulletinHelper.show_error(f"AutoTLDR: {e}")
+
+        return HookResult(strategy=HookStrategy.DEFAULT)
+
+    def _handle_tldr(self, account, params, args):
+        try:
+            client = self.client
+            peer = params.peer
+            count = self._get_count()
+            for p in (args or "").split():
+                if p.isdigit():
+                    count = max(1, int(p))
+                    break
+
+            # ищем @user в аргсах или реплай
+            reply = getattr(params, "reply_to_msg_id", None)
+            target_name = "чат"
+            target_id = None
+
+            if reply:
+                msgs = client.get_messages(peer, ids=[reply])
+                if msgs and msgs[0] and getattr(msgs[0], "from_id", None):
+                    target_id = getattr(msgs[0].from_id, "user_id", None)
+                    if target_id:
+                        try:
+                            ent = client.get_entity(target_id)
+                            target_name = get_display(ent)
+                        except Exception:
+                            target_name = str(target_id)
+
+            if not target_id:
+                for p in (args or "").split():
+                    if p.startswith("@"):
+                        try:
+                            ent = client.get_entity(p.lstrip("@"))
+                            target_id = ent.id
+                            target_name = get_display(ent)
+                        except Exception:
+                            pass
+                        break
+
+            if target_id:
+                self._do_user(account, params, peer, client, target_id, target_name, count)
+            else:
+                self._do_chat(account, params, peer, client, count)
+
+        except Exception as e:
+            BulletinHelper.show_error(f"AutoTLDR .tldr: {e}")
+
+    def _handle_tldrchat(self, account, params, args):
+        try:
+            client = self.client
+            peer = params.peer
+            count = self._get_count()
+            for p in (args or "").split():
+                if p.isdigit():
+                    count = max(1, int(p))
+                    break
+            self._do_chat(account, params, peer, client, count)
+        except Exception as e:
+            BulletinHelper.show_error(f"AutoTLDR .tldrchat: {e}")
+
+    def _handle_tldrcmp(self, account, params, args):
+        try:
+            client = self.client
+            peer = params.peer
+            count = self._get_count()
+            usernames = []
+            for p in (args or "").split():
+                if p.isdigit():
+                    count = max(1, int(p))
+                elif p.startswith("@"):
+                    usernames.append(p.lstrip("@"))
+
+            if len(usernames) < 2:
+                BulletinHelper.show_error("AutoTLDR: укажи двух юзеров: .tldrcmp @user1 @user2")
+                return
+
+            ent1 = client.get_entity(usernames[0])
+            ent2 = client.get_entity(usernames[1])
+            name1 = get_display(ent1)
+            name2 = get_display(ent2)
+
+            msgs1 = self._collect(client, peer, ent1.id, count)
+            msgs2 = self._collect(client, peer, ent2.id, count)
+
+            prompt = (
+                f"Сравни двух участников чата: «{name1}» и «{name2}». "
+                "Темы, манера общения, токсичность, кто провоцирует, сходства и различия.\n"
+                + ("Можешь материться.\n" if self.get_setting("allow_swearing", True) else "")
+                + "Формат: каждый тезис с новой строки, начинай с <b>Заголовок:</b>\n"
+                f"СООБЩЕНИЯ {name1}:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(msgs1))
+                + f"\n\nСООБЩЕНИЯ {name2}:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(msgs2))
+            )
+            result = self._ai_call(prompt)
+            body = sanitize(result)
+            header = f"🧠 <b>{name1} vs {name2}</b> <i>(по {len(msgs1)} и {len(msgs2)} сообщ.)</i>\n\n"
+            client.send_message(peer, header + body, parse_mode="html")
+
+        except Exception as e:
+            BulletinHelper.show_error(f"AutoTLDR .tldrcmp: {e}")
+
+    def _do_user(self, account, params, peer, client, target_id, target_name, count):
+        msgs = self._collect(client, peer, target_id, count)
+        if not msgs:
+            client.send_message(peer, f"🚫 У {target_name} нет сообщений в этом чате.", parse_mode="html")
+            return
+
+        prompt = (
+            f"Ты анализируешь сообщения пользователя «{target_name}» из группового чата. "
+            "Сделай короткий разбор: о чём пишет, настроение, манера, повторяющиеся темы.\n"
+            + ("Можешь материться.\n" if self.get_setting("allow_swearing", True) else "")
+            + "Формат: каждый тезис с новой строки, начинай с <b>Заголовок:</b> "
+            "Последняя строка: <b>Итог:</b> краткое резюме.\n"
+            "СООБЩЕНИЯ:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(msgs))
+        )
+        result = self._ai_call(prompt)
+        body = sanitize(result)
+        header = f"🧠 <b>Разбор {target_name}</b> <i>(по {len(msgs)} сообщ.)</i>\n\n"
+        client.send_message(peer, header + body, parse_mode="html")
+
+    def _do_chat(self, account, params, peer, client, count):
+        msgs = self._collect_chat(client, peer, count)
+        if not msgs:
+            client.send_message(peer, "🚫 В чате нет сообщений.", parse_mode="html")
+            return
+
+        prompt = (
+            "Ты анализируешь последние сообщения из группового чата. "
+            "Сделай разбор: о чём разговор, атмосфера, кто что говорит, есть ли конфликты.\n"
+            + ("Можешь материться.\n" if self.get_setting("allow_swearing", True) else "")
+            + "Формат: каждый тезис с новой строки, начинай с <b>Заголовок:</b> "
+            "Последняя строка: <b>Итог:</b> краткое резюме.\n"
+            "СООБЩЕНИЯ ЧАТА:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(msgs))
+        )
+        result = self._ai_call(prompt)
+        body = sanitize(result)
+        header = f"🧠 <b>О чём щас чат</b> <i>(по {len(msgs)} сообщ.)</i>\n\n"
+        client.send_message(peer, header + body, parse_mode="html")
+
+    def _collect(self, client, peer, user_id, count):
+        msgs_list = []
+        last_id = 0
+        while len(msgs_list) < count:
+            batch = client.get_messages(peer, from_user=user_id, limit=200, max_id=last_id or 0)
+            if not batch:
+                break
+            fetched = []
+            for m in batch:
+                last_id = m.id
+                body = format_msg(m)
+                if body:
+                    fetched.append(body)
+            fetched.reverse()
+            msgs_list = fetched + msgs_list
+            last_id -= 1
+        return msgs_list[:count]
+
+    def _collect_chat(self, client, peer, count):
+        msgs_list = []
+        last_id = 0
+        while len(msgs_list) < count:
+            batch = client.get_messages(peer, limit=200, max_id=last_id or 0)
+            if not batch:
+                break
+            fetched = []
+            for m in batch:
+                last_id = m.id
+                body = format_msg(m)
+                if body:
+                    name = "?"
+                    try:
+                        uid = getattr(getattr(m, "from_id", None), "user_id", None)
+                        if uid:
+                            ent = client.get_entity(uid)
+                            name = get_display(ent)
+                    except Exception:
+                        pass
+                    fetched.append(f"[{name}]: {body}")
+            fetched.reverse()
+            msgs_list = fetched + msgs_list
+            last_id -= 1
+        return msgs_list[:count]
