@@ -207,17 +207,51 @@ class Plugin(BasePlugin):
     def _ai_call(self, prompt):
         provider = self.get_setting("provider", 0)
         if provider == 0:
-            key = self.get_setting("gemini_api_key", "")
-            if not key:
-                raise RuntimeError("Gemini API ключ не задан в настройках")
+            keys = [k for k in self.get_setting("g_keys_pool", "").split("\n") if k.strip()]
+            if not keys:
+                key = self.get_setting("gemini_api_key", "")
+                if not key:
+                    raise RuntimeError("Gemini API ключ не задан в настройках")
+                keys = [key]
             model = GEMINI_MODELS[self.get_setting("gemini_model", 0)]
-            return call_gemini(key, model, prompt)
+            last_err = None
+            for i, k in enumerate(keys):
+                try:
+                    return call_gemini(k, model, prompt)
+                except urllib.error.HTTPError as e:
+                    if e.code == 429:
+                        last_err = f"Gemini 429 (ключ #{i+1})"
+                        continue
+                    raise
+                except Exception as e:
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        last_err = f"Gemini 429 (ключ #{i+1})"
+                        continue
+                    raise
+            raise RuntimeError(last_err or "Gemini: все ключи в лимите")
         else:
-            key = self.get_setting("openrouter_api_key", "")
-            if not key:
-                raise RuntimeError("OpenRouter API ключ не задан в настройках")
+            keys = [k for k in self.get_setting("or_keys_pool", "").split("\n") if k.strip()]
+            if not keys:
+                key = self.get_setting("openrouter_api_key", "")
+                if not key:
+                    raise RuntimeError("OpenRouter API ключ не задан в настройках")
+                keys = [key]
             model = OR_MODELS[self.get_setting("or_model", 0)]
-            return call_openrouter(key, model, prompt)
+            last_err = None
+            for i, k in enumerate(keys):
+                try:
+                    return call_openrouter(k, model, prompt)
+                except urllib.error.HTTPError as e:
+                    if e.code == 429:
+                        last_err = f"OpenRouter 429 (ключ #{i+1})"
+                        continue
+                    raise
+                except Exception as e:
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        last_err = f"OpenRouter 429 (ключ #{i+1})"
+                        continue
+                    raise
+            raise RuntimeError(last_err or "OpenRouter: все ключи в лимите")
 
     def on_send_message_hook(self, account, params):
         try:
@@ -236,6 +270,8 @@ class Plugin(BasePlugin):
                 threading.Thread(target=self._handle_tldrchat, args=(account, params, args), daemon=True).start()
             elif cmd == ".tldrcmp":
                 threading.Thread(target=self._handle_tldrcmp, args=(account, params, args), daemon=True).start()
+            elif cmd == ".kl":
+                threading.Thread(target=self._handle_kl, args=(account, params, args), daemon=True).start()
 
         except Exception as e:
             BulletinHelper.show_error(f"AutoTLDR: {e}")
@@ -339,6 +375,72 @@ class Plugin(BasePlugin):
 
         except Exception as e:
             BulletinHelper.show_error(f"AutoTLDR .tldrcmp: {e}")
+
+    def _handle_kl(self, account, params, args):
+        try:
+            client = self.client
+            peer = params.peer
+            reply = getattr(params, "reply_to_msg_id", None)
+
+            if not reply:
+                # без реплая — сброс
+                self.set_setting("g_keys_pool", "")
+                self.set_setting("or_keys_pool", "")
+                BulletinHelper.show_info("✅ AutoTLDR: пул ключей очищен")
+                return
+
+            msgs = client.get_messages(peer, ids=[reply])
+            if not msgs or not msgs[0]:
+                BulletinHelper.show_error("AutoTLDR .kl: не удалось получить сообщение")
+                return
+
+            msg = msgs[0]
+            raw = (getattr(msg, "message", "") or "").strip()
+
+            # если документ — скачать
+            media = getattr(msg, "media", None)
+            if media and not raw:
+                try:
+                    path = client.download_media(msg, file="/tmp/autotldr_keys.txt")
+                    if path:
+                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                            raw = f.read()
+                except Exception:
+                    pass
+
+            if not raw:
+                # пустой реплай = сброс
+                self.set_setting("g_keys_pool", "")
+                self.set_setting("or_keys_pool", "")
+                BulletinHelper.show_info("✅ AutoTLDR: пул ключей очищен")
+                return
+
+            g_keys = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
+            or_keys = re.findall(r"sk-or-v1-[0-9a-fA-F]{30,}", raw)
+
+            if not g_keys and not or_keys:
+                BulletinHelper.show_error("AutoTLDR .kl: ключи не найдены")
+                return
+
+            def merge_pool(setting_key, new):
+                old = self.get_setting(setting_key, "")
+                existing = set(old.split("\n")) if old else set()
+                added = 0
+                for k in new:
+                    if k not in existing:
+                        existing.add(k)
+                        added += 1
+                self.set_setting(setting_key, "\n".join(existing))
+                return added, len(existing)
+
+            g_added, g_total = merge_pool("g_keys_pool", g_keys)
+            or_added, or_total = merge_pool("or_keys_pool", or_keys)
+            BulletinHelper.show_info(
+                f"✅ Gemini: +{g_added} (всего {g_total}) | OpenRouter: +{or_added} (всего {or_total})"
+            )
+
+        except Exception as e:
+            BulletinHelper.show_error(f"AutoTLDR .kl: {e}")
 
     def _do_user(self, account, params, peer, client, target_id, target_name, count):
         msgs = self._collect(client, peer, target_id, count)
