@@ -1,7 +1,7 @@
 __id__ = "autotldr"
 __name__ = "🧠 AutoTLDR"
 __description__ = "AI-анализ чата и пользователей через Gemini/OpenRouter. .tldr @user, .tldrchat, .tldrcmp, .kl"
-__author__ = "@ziwupa"
+__author__ = "@zetmodules"
 __version__ = "1.0"
 __icon__ = "msg_photo_text_regular"
 __min_version__ = "11.12.0"

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# meta developer: @ziwupa
+# meta developer: @zetmodules
 # scope: heroku_only
 
 from .. import loader, utils
@@ -19,6 +19,7 @@ import tempfile
 @loader.tds
 class AutoTLDRMod(loader.Module):
     """AI-анализ сообщений. Реплай = разбор человека. Без реплая = разбор чата. .tldr @user = разбор юзера по нику."""
+    channel = "@zetmodules"
 
     strings = {
         "name": "AutoTLDR",
