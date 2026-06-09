@@ -42,6 +42,7 @@ OR_MODELS = [
 ]
 
 DS_MODELS = [
+    "deepseek-chat-v4-pro",
     "deepseek-chat",
     "deepseek-reasoner",
 ]

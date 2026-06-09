@@ -181,7 +181,7 @@ class AutoTLDRMod(loader.Module):
                 validator=loader.validators.Hidden(),
             ),
             loader.ConfigValue(
-                "deepseek_model", "deepseek-chat", doc="Модель DeepSeek"
+                "deepseek_model", "deepseek-chat-v4-pro", doc="Модель DeepSeek"
             ),
             loader.ConfigValue(
                 "ds_keys_file",
