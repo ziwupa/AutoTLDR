@@ -196,7 +196,7 @@ class AutoTLDRMod(loader.Module):
             ),
             loader.ConfigValue(
                 "swear_level",
-                2,
+                1,
                 doc="Уровень жести: 0=добрый, 1=пиздец",
                 validator=loader.validators.Integer(minimum=0, maximum=1),
             ),
@@ -936,15 +936,16 @@ class AutoTLDRMod(loader.Module):
         if not raw.strip():
             # пустой ответ = сбросить файлы ключей
             def clear_file(file_cfg):
-                path = os.path.join(os.getcwd(), self.config[file_cfg])
-                if os.path.isfile(path):
-                    try:
+                try:
+                    path = os.path.join(os.getcwd(), self.config[file_cfg])
+                    if os.path.isfile(path):
                         open(path, "w").close()
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
             clear_file("keys_file")
             clear_file("or_keys_file")
+            clear_file("ds_keys_file")
             return await utils.answer(message, self._s("kl_cleared"))
 
         new_g = re.findall(r"AIza[0-9A-Za-z_-]{15,}", raw)
