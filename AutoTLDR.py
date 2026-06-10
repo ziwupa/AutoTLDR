@@ -517,7 +517,10 @@ class AutoTLDRMod(loader.Module):
             if status == 200:
                 self._key_idx = (idx + 1) % n
                 return self._parse_gemini_text(data)
-            if status in (429, 403) or "suspended" in str(data).lower():
+            if status in (429, 403, 400):
+                last_err = f"Gemini {status} (ключ #{idx + 1})"
+                continue
+            if "suspended" in str(data).lower() or "invalid" in str(data).lower():
                 last_err = f"Gemini {status} (ключ #{idx + 1})"
                 continue
             raise RuntimeError(f"Gemini {status}: {data}")
