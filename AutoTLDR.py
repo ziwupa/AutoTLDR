@@ -517,8 +517,8 @@ class AutoTLDRMod(loader.Module):
             if status == 200:
                 self._key_idx = (idx + 1) % n
                 return self._parse_gemini_text(data)
-            if status == 429:
-                last_err = f"Gemini 429 (ключ #{idx + 1})"
+            if status in (429, 403) or "suspended" in str(data).lower():
+                last_err = f"Gemini {status} (ключ #{idx + 1})"
                 continue
             raise RuntimeError(f"Gemini {status}: {data}")
 
@@ -570,8 +570,8 @@ class AutoTLDRMod(loader.Module):
                 if status == 200:
                     self._key_idx = (idx + 1) % n
                     return data["choices"][0]["message"]["content"]
-                if status == 429:
-                    last_err = f"OpenRouter 429 (ключ #{idx + 1})"
+                if status == 429 or status == 403:
+                    last_err = f"OpenRouter {status} (ключ #{idx + 1})"
                     continue
                 raise RuntimeError(f"{provider} {status}: {data}")
 
@@ -603,8 +603,8 @@ class AutoTLDRMod(loader.Module):
                         if r.status == 200:
                             self._key_idx = (idx + 1) % n
                             return data["choices"][0]["message"]["content"]
-                        if r.status == 429:
-                            last_err = f"DeepSeek 429 (ключ #{idx + 1})"
+                        if r.status == 429 or r.status == 403:
+                            last_err = f"DeepSeek {r.status} (ключ #{idx + 1})"
                             continue
                         raise RuntimeError(f"{provider} {r.status}: {data}")
                     raise RuntimeError(f"Все {n} ключей DeepSeek упёрлись в лимит. Последнее: {last_err}")
