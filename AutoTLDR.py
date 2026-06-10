@@ -900,6 +900,21 @@ class AutoTLDRMod(loader.Module):
         labels = {0: "😇 Добрый", 1: "🤬 Пиздец"}
         await utils.answer(message, f"🧠 <b>Режим:</b> {labels[new]}")
 
+    @loader.command(ru_doc="[gemini|openrouter|deepseek|openai] — Сменить AI-провайдера")
+    async def tldrprovcmd(self, message):
+        """[provider] — Switch AI provider"""
+        args = utils.get_args_raw(message).strip().lower()
+        providers = ["gemini", "openrouter", "deepseek", "openai"]
+        if args in providers:
+            self.config["provider"] = args
+        else:
+            curr = self.config["provider"]
+            idx = providers.index(curr) if curr in providers else 0
+            args = providers[(idx + 1) % len(providers)]
+            self.config["provider"] = args
+        icons = {"gemini": "🔷", "openrouter": "🔶", "deepseek": "🟢", "openai": "⬜"}
+        await utils.answer(message, f"{icons.get(args, '')} <b>Провайдер:</b> {args}")
+
     @loader.command(ru_doc="Ответь на сообщение/файл с ключами — добавит в пул")
     async def klcmd(self, message):
         """Reply to a message or file with API keys — add them to the pool. No reply = clear."""
