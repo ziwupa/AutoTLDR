@@ -902,39 +902,35 @@ class AutoTLDRMod(loader.Module):
 
     @loader.command(ru_doc="Ответь на сообщение/файл с ключами — добавит в пул")
     async def klcmd(self, message):
-        """Reply to a message or file with API keys — add them to the pool"""
+        """Reply to a message or file with API keys — add them to the pool. No reply = clear."""
         reply = await message.get_reply_message()
-        if not reply:
-            return await utils.answer(message, self._s("kl_no_reply"))
 
         raw = ""
 
-        # 1) Файл (документ) — скачать и прочитать
-        doc = getattr(reply, "document", None)
-        if doc:
-            tmp = None
-            try:
-                fd, tmp = tempfile.mkstemp(suffix=".txt")
-                os.close(fd)
-                tmp = await reply.download_media(file=tmp)
-                if tmp and os.path.isfile(tmp):
-                    with open(tmp, "r", encoding="utf-8", errors="ignore") as f:
-                        raw = f.read()
-            except Exception:
-                pass
-            finally:
-                if tmp and os.path.isfile(tmp):
-                    try:
-                        os.unlink(tmp)
-                    except Exception:
-                        pass
+        # реплай есть — читаем
+        if reply:
+            doc = getattr(reply, "document", None)
+            if doc:
+                tmp = None
+                try:
+                    fd, tmp = tempfile.mkstemp(suffix=".txt")
+                    os.close(fd)
+                    tmp = await reply.download_media(file=tmp)
+                    if tmp and os.path.isfile(tmp):
+                        with open(tmp, "r", encoding="utf-8", errors="ignore") as f:
+                            raw = f.read()
+                except Exception:
+                    pass
+                finally:
+                    if tmp and os.path.isfile(tmp):
+                        try: os.unlink(tmp)
+                        except: pass
 
-        # 2) Текст сообщения
-        if not raw:
-            raw = reply.raw_text or getattr(reply, "text", "") or ""
+            if not raw:
+                raw = reply.raw_text or getattr(reply, "text", "") or ""
 
-        if not raw.strip():
-            # пустой ответ = сбросить файлы ключей
+        # без реплая или пустой реплай = сброс
+        if not reply or not raw.strip():
             def clear_file(file_cfg):
                 try:
                     path = os.path.join(os.getcwd(), self.config[file_cfg])
@@ -942,7 +938,6 @@ class AutoTLDRMod(loader.Module):
                         open(path, "w").close()
                 except Exception:
                     pass
-
             clear_file("keys_file")
             clear_file("or_keys_file")
             clear_file("ds_keys_file")
